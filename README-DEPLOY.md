@@ -1,7 +1,10 @@
 # AUTO ΤΖΗΜΑΓΙΩΡΓΗΣ — Website (Anleitung, Deutsch)
 
+**Live:** https://www.auto-tzimagiorgis.com
+**Code:** https://github.com/dimi2404/auto-tzimagiorgis (GitHub Pages, Branch `main`)
+
 Statische Website, kein Backend, keine Datenbank. Reines HTML/CSS/JS —
-läuft auf jedem klassischen Webhosting, Upload per FTP.
+gehostet über GitHub Pages, Veröffentlichung per `git push`.
 
 Aktueller Stand: **33 Fahrzeuge**, **1.193 Fotos** im WebP-Format, ca. **96 MB**.
 
@@ -142,29 +145,34 @@ python3 tools/serve.py
 
 Dann <http://localhost:4321> öffnen.
 
-## 8. Hochladen (FTP)
+## 8. Änderungen veröffentlichen
 
-In das Web-Root (`public_html` / `httpdocs`) gehören:
-
-```
-index.html  legal.html  privacy.html  404.html  robots.txt  sitemap.xml
-assets/  cars/  data/  images/
-```
-
-**Nicht** hochladen: `tools/`, `README-DEPLOY.md`, `.claude/`.
-
-Wegen der rund 1.600 Bilddateien ist reiner FTP-Upload zäh. Besser: den Ordner als ZIP
-hochladen und im Dateimanager des Hosting-Panels entpacken.
-
-**Wichtig nach dem Domain-Kauf:** einmal mit gesetzter Domain neu bauen —
+Die Seite liegt bei GitHub und wird von GitHub Pages ausgeliefert. Kein FTP nötig —
+ein Push genügt, ein bis zwei Minuten später ist die Änderung live:
 
 ```bash
-SITE_URL=https://www.deine-domain.gr python3 tools/import-cargr.py --no-images
+cd /Users/dimi/Desktop/Business/autohaus-website
+git add -A
+git commit -m "Fahrzeugbestand aktualisiert"
+git push
 ```
 
-Erst dann enthalten die Fahrzeugseiten `canonical`, `og:url` und `og:image` mit der
-echten Adresse. Ohne diesen Schritt zeigt WhatsApp beim Teilen kein Vorschaubild.
-Außerdem in `index.html` das `<link rel="canonical">` anpassen.
+Kompletter Ablauf, wenn neue Autos auf car.gr stehen:
+
+```bash
+python3 tools/import-cargr.py
+SITE_URL=https://www.auto-tzimagiorgis.com python3 tools/build_pages.py
+git add -A && git commit -m "Fahrzeugbestand aktualisiert" && git push
+```
+
+Den Stand der Veröffentlichung siehst du mit:
+
+```bash
+gh api repos/dimi2404/auto-tzimagiorgis/pages/builds/latest --jq .status
+```
+
+**Wichtig:** Die Datei `CNAME` im Hauptordner enthält die Domain. Sie darf nicht
+gelöscht werden — sonst verliert GitHub Pages die Verknüpfung zur Domain.
 
 ## 8a. Rechtliche Angaben ergänzen (Pflicht vor dem Launch)
 
@@ -173,15 +181,21 @@ In `data/site.json` unter `"legal"` eintragen: `owner` (Name des Verantwortliche
 `legal.html` automatisch ausgeblendet — solange sie leer sind, ist die Seite
 unvollständig und die Website nicht rechtssicher.
 
-## 9. Domain / DNS
+## 9. Domain / DNS (erledigt)
 
-1. Domain kaufen.
-2. Beim Hosting-Anbieter die Server-IP holen.
-3. Beim Domain-Anbieter setzen:
-   - `A`-Record: `@` → IP des Servers
-   - `A`-Record (oder `CNAME`): `www` → IP bzw. Hauptdomain
-4. SSL-Zertifikat (Let's Encrypt) im Hosting-Panel aktivieren, HTTPS-Weiterleitung an.
-5. DNS-Änderungen brauchen bis zu 24 Stunden.
+Domain bei Namecheap, Auslieferung über GitHub Pages. Eingetragen sind:
+
+| Typ   | Host | Wert                  |
+|-------|------|-----------------------|
+| A     | `@`  | `185.199.108.153`     |
+| A     | `@`  | `185.199.109.153`     |
+| A     | `@`  | `185.199.110.153`     |
+| A     | `@`  | `185.199.111.153`     |
+| CNAME | `www`| `dimi2404.github.io.` |
+
+`auto-tzimagiorgis.com` (ohne www) und alle HTTP-Aufrufe leiten auf
+`https://www.auto-tzimagiorgis.com` um. HTTPS ist erzwungen, das Zertifikat
+erneuert GitHub automatisch.
 
 ## 10. Hinweis zu den Fotos
 
