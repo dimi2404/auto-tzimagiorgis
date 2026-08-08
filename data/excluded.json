@@ -1,0 +1,6 @@
+{
+  "_kommentar": "car.gr-IDs, die NICHT auf der Website erscheinen sollen. Werden bei jedem Import übersprungen. Die ID steht am Ende der car.gr-Adresse: /cars/view/49439267",
+  "ids": [
+    { "id": 49439267, "grund": "Mercedes-Benz Atego 816 — LKW, soll nicht auf die Website" }
+  ]
+}
