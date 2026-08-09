@@ -619,7 +619,7 @@ h1, h2, h3, h4 {
 .footer a:hover { color: var(--white); }
 
 /* ---------- Detailseite ---------- */
-.detail { padding: 130px 0 90px; }
+.detail { padding-block: 130px 90px; }
 .breadcrumb { color: var(--grey-500); font-size: 0.88rem; margin-bottom: 24px; }
 .breadcrumb a:hover { color: var(--red-light); }
 .detail__grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 48px; align-items: start; }
@@ -682,7 +682,7 @@ h1, h2, h3, h4 {
 .detail__actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 
 /* ---------- Rechtliche Seiten ---------- */
-.legal { padding: 130px 0 90px; max-width: 820px; }
+.legal { padding-block: 130px 90px; max-width: 820px; }
 .legal h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); margin-bottom: 28px; }
 .legal h2 { font-size: 1.15rem; margin: 36px 0 12px; }
 .legal p { color: var(--grey-300); }
@@ -787,13 +787,64 @@ h1, h2, h3, h4 {
 
 @media (max-width: 600px) {
   .container { padding-inline: 18px; }
-  .cars-grid { grid-template-columns: 1fr; }
-  .hero { min-height: auto; padding: 118px 0 60px; }
-  .hero__stats { gap: 28px; }
-  .hero__stat strong { font-size: 1.5rem; }
-  .hero__logos { max-width: 210px; margin-top: 34px; }
-  .hero__logo { gap: 14px; }
-  .hero__logo figcaption { font-size: 0.68rem; letter-spacing: 0.16em; }
-  .btn { padding: 13px 22px; }
-  .filters select, .filters__reset { flex: 1 1 45%; }
+  .section { padding: 56px 0; }
+  .section-head { margin-bottom: 34px; }
+
+  /* Der Hero war über anderthalb Bildschirme hoch — man sah kein Auto,
+     ohne lange zu scrollen. Jetzt kompakter in allen Teilen. */
+  .hero { min-height: auto; padding: 90px 0 38px; }
+  .hero__inner { gap: 22px; }
+  .hero h1 { font-size: 1.92rem; line-height: 1.12; margin-bottom: 14px; }
+  .hero p { font-size: 0.97rem; line-height: 1.55; margin-bottom: 22px; }
+  .eyebrow { font-size: 0.7rem; margin-bottom: 10px; }
+
+  /* Buttons ohne Zwischenraum-Verschwendung, volle Breite = großes Tippziel */
+  .hero__actions { flex-direction: column; align-items: stretch; gap: 10px; }
+  .hero__actions .btn { width: 100%; padding: 14px 20px; }
+
+  .hero__logos { max-width: 158px; margin: 4px auto 0; }
+  .hero__logo { gap: 11px; }
+  .hero__logo figcaption { font-size: 0.62rem; letter-spacing: 0.14em; }
+
+  /* Kennzahlen nebeneinander statt untereinander — spart über 120 px */
+  .hero__stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 30px; padding-top: 24px; }
+  .hero__stat strong { font-size: 1.25rem; }
+  .hero__stat span { font-size: 0.6rem; letter-spacing: 0.08em; }
+
+  /* Filter zweispaltig */
+  .filters { gap: 9px; margin-bottom: 30px; }
+  .filters select, .filters__reset { flex: 1 1 calc(50% - 5px); min-width: 0; padding: 12px 34px 12px 15px; font-size: 0.92rem; }
+  .filters select { background-position: right 12px center; }
+  .filters__reset { flex-basis: 100%; }
+  .results-count { margin: -20px 0 22px; }
+
+  /* Fahrzeugkarten: der Textteil war höher als das Foto */
+  .cars-grid { grid-template-columns: 1fr; gap: 18px; }
+  .car-card__media { aspect-ratio: 16 / 10; }
+  .car-card__body { padding: 16px 18px 18px; }
+  .car-card__title { font-size: 1.15rem; margin: 4px 0 12px; }
+  .car-card__specs { gap: 9px 14px; padding: 13px 0; margin-bottom: 14px; }
+  .car-card__specs b { font-size: 0.94rem; }
+  .car-card__specs span { font-size: 0.66rem; }
+  .car-card__foot { gap: 12px; }
+  .price { font-size: 1.4rem; }
+  .flags { margin-bottom: 12px; }
+
+  /* Detailseite */
+  .detail { padding-block: 96px 60px; }
+  .detail__title { margin-bottom: 4px; }
+  .detail__price { font-size: 2.1rem; margin: 8px 0 16px; }
+  .detail__actions { grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* dritter Knopf (Email) über die volle Breite statt halb allein */
+  .detail__actions .btn:nth-child(3) { grid-column: 1 / -1; }
+  .key-facts { grid-template-columns: 1fr 1fr; gap: 10px; margin: 24px 0 28px; }
+  .key-facts li { padding: 12px 14px; }
+  .gallery__nav { width: 40px; height: 40px; font-size: 1.5rem; }
+  .thumbs button { flex-basis: 68px; }
+  .spec-table th, .spec-table td { padding: 10px 0; font-size: 0.92rem; }
+
+  /* Kontakt und Rechtsseiten */
+  .contact__list { gap: 18px; }
+  .legal { padding-block: 96px 60px; }
+  .footer__inner { flex-direction: column; align-items: flex-start; gap: 10px; }
 }
