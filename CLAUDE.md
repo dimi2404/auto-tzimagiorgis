@@ -44,6 +44,48 @@ Neue Fotos danach einmal umwandeln: `python3 tools/optimize-images.py`
 
 Lokal ansehen: `python3 tools/serve.py` → http://localhost:4321
 
+## Überwachung
+
+`tools/watch-site.py` prüft die Live-Seite alle 5 Minuten: DNS (CNAME + die vier
+GitHub-Pages-IPs, Nameserver), TLS-Ablauf, sieben Pflichtseiten mit Inhaltsprobe,
+und aus `cars.json` je Lauf eine rotierende Fahrzeugseite samt Foto.
+
+```bash
+python3 tools/watch-site.py             # einmal prüfen
+python3 tools/watch-site.py --verbose   # alle Einzelergebnisse
+python3 tools/watch-site.py --status    # letzter Stand + Historie
+python3 tools/watch-site.py --install   # als launchd-Dienst einrichten
+python3 tools/watch-site.py --uninstall
+```
+
+- Alarm per macOS-Mitteilung, nur bei **Zustandswechsel**, danach höchstens alle
+  6 Stunden. Optional zusätzlich ein Webhook über `WATCHER_WEBHOOK`.
+- Jeder Lauf schreibt `Auto Tzimagiorgis/Website-Status.md` in den Obsidian-Vault
+  (Pfad überschreibbar mit `WATCHER_VAULT`) — dort liest ein Agent den Stand nach.
+- Zustand, Log und die vom Dienst ausgeführte Skriptkopie liegen in
+  `~/Library/Application Support/auto-tzimagiorgis-watcher/`. **Nicht** im
+  Projektordner, weil launchd `~/Desktop` nicht lesen darf (macOS-Dateischutz).
+- Nach jeder Änderung an `watch-site.py` einmal `--install` aufrufen, sonst läuft
+  der Dienst mit der alten Kopie weiter.
+
+### Rund um die Uhr, ohne Kosten
+
+`.github/workflows/watch-site.yml` fährt dieselben Prüfungen alle 10 Minuten auf
+GitHub-Rechnern — läuft also auch, wenn der Mac aus ist. Das Repo ist öffentlich,
+damit sind die Actions-Minuten unbegrenzt und gratis.
+
+- Bei Störung legt der Workflow ein Issue mit Label `website-down` an. Bleibt die
+  Störung, bleibt das Issue offen — kein Kommentar alle 10 Minuten. Sobald die
+  Seite wieder läuft, wird kommentiert und geschlossen.
+- Benachrichtigung kommt über GitHub (Mail und GitHub-App aufs Handy), weil man
+  eigene Repos automatisch beobachtet.
+- Der Modus dazu ist `python3 tools/watch-site.py --ci`: keine macOS-Mitteilung,
+  keine Obsidian-Notiz, kein Zustandsspeicher, Bericht nach `ci-report.md`.
+- GitHub kann geplante Läufe bei Last **verzögern**, mal 10, mal 25 Minuten. Für
+  Sofortmeldungen ist der lokale launchd-Dienst da; die Action ist das Netz darunter.
+- Geplante Workflows werden von GitHub nach **60 Tagen ohne Commit** abgeschaltet.
+  Da regelmäßig Fahrzeugbestand gepusht wird, passiert das im Normalfall nicht.
+
 ## Wichtig zu wissen
 
 - **car.gr drosselt** bei zu vielen Anfragen (HTTP 429). Dann warten, nicht neu starten.

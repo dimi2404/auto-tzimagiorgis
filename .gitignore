@@ -9,3 +9,6 @@ __pycache__/
 # Editor / lokale Werkzeuge
 .claude/
 .vscode/
+
+# Watcher: Zustand, Log und launchd-Ausgabe (nur lokal)
+.watcher/
