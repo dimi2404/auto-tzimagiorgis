@@ -31,15 +31,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Projektordners: launchd-Prozesse duerfen ~/Desktop nicht lesen (macOS-
 # Dateischutz), und der Zustand gehoert ohnehin nicht ins Repo.
 HOME_DIR = os.path.expanduser("~/Library/Application Support/auto-tzimagiorgis-watcher")
-STATE_DIR = HOME_DIR
 AGENT_SCRIPT = os.path.join(HOME_DIR, "watch-site.py")
+# WATCHER_STATE_DIR nur fuer Probelaeufe setzen, damit ein Test den echten
+# Zustand und die echte Historie nicht anfasst.
+STATE_DIR = os.environ.get("WATCHER_STATE_DIR") or HOME_DIR
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 LOG_FILE = os.path.join(STATE_DIR, "watch.log")
 LABEL = "com.dimi.autotzimagiorgis.watcher"
 PLIST = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % LABEL)
 
-DOMAIN = "auto-tzimagiorgis.com"
-HOST = "www." + DOMAIN
+# WATCHER_DOMAIN / WATCHER_HOST nur fuer Probelaeufe setzen (Feuertest gegen
+# eine absichtlich kaputte Adresse). Im Normalbetrieb bleibt es die echte Domain.
+DOMAIN = os.environ.get("WATCHER_DOMAIN") or "auto-tzimagiorgis.com"
+HOST = os.environ.get("WATCHER_HOST") or ("www." + DOMAIN)
 BASE = "https://" + HOST
 
 # GitHub Pages: apex zeigt auf diese vier A-Records, www auf den Pages-Host.
