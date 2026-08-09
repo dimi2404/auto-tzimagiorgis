@@ -68,6 +68,22 @@ python3 tools/watch-site.py --uninstall
 - Nach jeder Änderung an `watch-site.py` einmal `--install` aufrufen, sonst läuft
   der Dienst mit der alten Kopie weiter.
 
+### Alarm testen
+
+Probelauf gegen eine absichtlich kaputte Adresse, ohne den echten Zustand und
+die echte Historie anzufassen:
+
+```bash
+T=$(mktemp -d)
+WATCHER_STATE_DIR=$T WATCHER_VAULT=$T \
+  WATCHER_DOMAIN=auto-tzimagiorgis-kaputt.com python3 tools/watch-site.py
+```
+
+Erwartet: `[DOWN]`, Exitcode 2, eine macOS-Mitteilung. Ein zweiter Lauf im selben
+`WATCHER_STATE_DIR` darf **nicht** erneut alarmieren. Ohne `WATCHER_DOMAIN`
+danach kommt die Entwarnung. `WATCHER_HOST=example.com` prüft den Fall
+„Domain zeigt auf fremde IPs".
+
 ### Rund um die Uhr, ohne Kosten
 
 `.github/workflows/watch-site.yml` fährt dieselben Prüfungen alle 10 Minuten auf
