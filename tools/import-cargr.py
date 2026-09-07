@@ -364,7 +364,21 @@ def classified_from_html(cid, markup):
         elif key in SPEC_LABELS and value:
             specs.setdefault(SPEC_LABELS[key], value)
 
-    make, _, model = make_model.partition(" ")
+    # Marke bevorzugt aus JSON-LD: die Merkmalzeile "Μάρκα - μοντέλο" liefert nur
+    # "Land Rover Range Rover Velar" am Stueck, und ein Split am ersten Leerzeichen
+    # macht daraus die Marke "Land".
+    brand = vehicle.get("brand")
+    if isinstance(brand, dict):
+        brand = brand.get("name")
+    if not isinstance(brand, str):
+        brand = vehicle.get("manufacturer") if isinstance(vehicle.get("manufacturer"), str) else None
+    ld_model = vehicle.get("model") if isinstance(vehicle.get("model"), str) else None
+
+    if brand and make_model.lower().startswith(brand.lower()):
+        make = brand
+        model = ld_model or make_model[len(brand):].strip()
+    else:
+        make, _, model = make_model.partition(" ")
     name = vehicle.get("name") or ""
     if not name:
         match = re.search(r"<h1[^>]*>(.*?)</h1>", markup, re.S) or \
