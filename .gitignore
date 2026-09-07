@@ -12,3 +12,6 @@ __pycache__/
 
 # Watcher: Zustand, Log und launchd-Ausgabe (nur lokal)
 .watcher/
+
+# Zwischengespeicherte car.gr-Seiten (nur lokal)
+.cache/

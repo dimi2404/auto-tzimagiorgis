@@ -15,7 +15,9 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
+from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,6 +30,12 @@ PHOTO_SIZE = "z"   # Galerie + Titelbild (575 px)
 LARGE_SIZE = "b"   # Lightbox / Grossansicht (1024 px)
 LARGE_COUNT = 10   # so viele Fotos je Fahrzeug zusaetzlich in gross
 # (Fahrzeugtyp, Uebersichtsseite) — car.gr trennt PKW und Nutzfahrzeuge
+# Abstand zwischen zwei Detailseiten. car.gr drosselt haerter als frueher:
+# unter ~4 s kommen nach ein paar Dutzend Abrufen nur noch 429er. Der komplette
+# Bestand braucht damit rund vier Minuten - das ist der Preis dafuer, nicht
+# gesperrt zu werden. Ueber CARGR_DELAY anpassbar.
+PAGE_DELAY = float(os.environ.get("CARGR_DELAY", "4"))
+CACHE_DIR = os.path.join(ROOT, ".cache", "cargr")
 LIST_PAGES = [
     ("Επιβατικά", "/cars/"),
     ("Επιβατικά", "/cars/?pg=2"),
@@ -145,6 +153,311 @@ def clean_variant(variant, make, model):
         else:
             words.append(word)
     return " ".join(words).strip(" .-")
+
+
+# ----------------------------------------------------------------------------
+# car.gr hat die JSON-API im Sommer 2026 hinter eine Cloudflare-Pruefung gelegt:
+# /api/classifieds/<id>/ antwortet nur noch mit 403. Die oeffentlichen
+# Detailseiten sind weiter frei zugaenglich und enthalten dieselben Angaben im
+# HTML. Der Importer liest sie deshalb von dort und baut daraus genau die
+# Struktur nach, die frueher die API lieferte — build_car() bleibt unveraendert.
+# ----------------------------------------------------------------------------
+
+VOID_TAGS = {"br", "img", "input", "meta", "link", "hr", "source", "path",
+             "circle", "use", "col", "area", "base", "embed", "track", "wbr"}
+
+
+class Node(object):
+    __slots__ = ("tag", "attrs", "kids", "parent", "text")
+
+    def __init__(self, tag="", attrs=None, parent=None):
+        self.tag = tag
+        self.attrs = attrs or {}
+        self.kids = []
+        self.parent = parent
+        self.text = ""
+
+    @property
+    def cls(self):
+        return self.attrs.get("class", "")
+
+    def all_text(self):
+        parts = [self.text]
+        for kid in self.kids:
+            parts.append(kid.all_text())
+        return " ".join(p for p in parts if p).strip()
+
+
+class _Tree(HTMLParser):
+    """Winziger DOM-Aufbau. Reicht fuer car.gr und braucht keine Fremdpakete."""
+
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.root = Node("#root")
+        self.cur = self.root
+
+    def handle_starttag(self, tag, attrs):
+        node = Node(tag, dict(attrs), self.cur)
+        self.cur.kids.append(node)
+        if tag not in VOID_TAGS:
+            self.cur = node
+
+    def handle_startendtag(self, tag, attrs):
+        self.cur.kids.append(Node(tag, dict(attrs), self.cur))
+
+    def handle_endtag(self, tag):
+        if tag in VOID_TAGS:
+            return
+        node = self.cur
+        while node is not self.root and node.tag != tag:
+            node = node.parent
+        if node is not self.root and node.parent is not None:
+            self.cur = node.parent
+
+    def handle_data(self, data):
+        text = data.strip()
+        if text:
+            self.cur.text = (self.cur.text + " " + text).strip()
+
+
+def parse_html(markup):
+    tree = _Tree()
+    tree.feed(markup)
+    return tree.root
+
+
+def walk(node):
+    yield node
+    for kid in node.kids:
+        for inner in walk(kid):
+            yield inner
+
+
+def json_ld_vehicle(markup):
+    """Der Fahrzeug-Block aus den JSON-LD-Daten der Seite (Name, Fotos, Preis)."""
+    for block in re.findall(
+            r'<script type="application/ld\+json"[^>]*>(.*?)</script>', markup, re.S):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and (data.get("vehicleTransmission")
+                                       or data.get("mileageFromOdometer")
+                                       or data.get("vehicleEngine")):
+            return data
+    return {}
+
+
+# car.gr beschriftet die Merkmale griechisch. Links die Beschriftung auf der
+# Seite, rechts der Name, den build_car() erwartet.
+SPEC_LABELS = {
+    "Χρονολογία": "registration",
+    "Τιμή": "price",
+    "Χιλιόμετρα": "mileage",
+    "Καύσιμο": "fuel_type",
+    "Σασμάν": "gearbox_type",
+    "Ιπποδύναμη": "engine_power",
+    "Κυβικά": "engine_size",
+    "Πόρτες": "doors",
+    "Θέσεις επιβατών": "seats",
+    "Χρώμα": "exterior_color",
+    "Χρώμα εσωτερικού": "interior_color",
+    "Επένδυση σαλονιού": "interior_type",
+    "Κίνηση τροχών": "drive_type",
+    "Κλάση ρύπων": "euroclass",
+    "Εκπομπές CO2": "emissions_co2",
+    "ΚΤΕΟ μέχρι": "kteo",
+    "Τέλη κυκλοφορίας": "circulation_tax",
+    "Σύνολο κατόχων": "previous_owners",
+    "Αερόσακοι": "airbags",
+    "Μέγεθος ζάντας": "rim_size",
+    "Κατάσταση": "condition",
+}
+BRAND_LABEL = "Μάρκα - μοντέλο"
+VARIANT_LABEL = "Τύπος / έκδοση"
+EXTRAS_HEADING = "Ιδιαιτερότητες"
+DESCRIPTION_HEADING = "Περιγραφή"
+
+
+def label_pairs(root):
+    """Alle Merkmalzeilen der Seite als (Beschriftung, Wert)."""
+    pairs = []
+    for node in walk(root):
+        if "tw-grid-cols-2" not in node.cls:
+            continue
+        kids = [k for k in node.kids if k.tag not in ("#text",)]
+        if len(kids) < 2 or "tw-font-medium" not in kids[0].cls:
+            continue      # ohne fette Beschriftung ist es die Ausstattungsliste
+        key = kids[0].all_text()
+        value = kids[1].all_text()
+        if key:
+            pairs.append((key, value))
+    return pairs
+
+
+def extras_list(root):
+    """Ausstattung unter der Ueberschrift 'Ιδιαιτερότητες'."""
+    for node in walk(root):
+        if node.all_text().strip() == EXTRAS_HEADING and node.parent is not None:
+            block = node.parent
+            items = []
+            for inner in walk(block):
+                if "tw-grid-cols-2" not in inner.cls:
+                    continue
+                for cell in inner.kids:
+                    text = cell.all_text().strip()
+                    if text and text not in items:
+                        items.append(text)
+            if items:
+                return items
+    return []
+
+
+def description_from(root):
+    for node in walk(root):
+        if node.all_text().strip().startswith(DESCRIPTION_HEADING) and node.parent:
+            text = node.parent.all_text()
+            return text.replace(DESCRIPTION_HEADING, "", 1).strip()
+    return ""
+
+
+# car.gr nummeriert die Fotos einstellig: 0-9, dann a-z, dann A-Z.
+# Gross- und Kleinschreibung sind verschiedene Bilder ('d' ist nicht 'D'),
+# darum eine eigene Reihenfolge statt int(..., 36).
+PHOTO_INDEX = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def photo_patterns(markup, cid, vehicle):
+    """Foto-URLs als Muster mit {size}, so wie sie die API geliefert hat.
+
+    Zwei Quellen, weil keine allein vollstaendig ist: die JSON-LD-Daten listen
+    alle Fotos, fehlen aber bei manchen Inseraten ganz; im Markup stehen nur
+    die ersten (der Rest wird nachgeladen), dafuer immer.
+    """
+    found = []
+    for url in (vehicle.get("image") or []):
+        if isinstance(url, str):
+            found += re.findall(r"static\.car\.gr/%s_(.)_[a-z]\.jpg" % cid, url)
+    found += re.findall(r"static\.car\.gr/%s_(.)_[a-z]\.jpg" % cid, markup)
+
+    seen = []
+    for index in found:
+        if index in PHOTO_INDEX and index not in seen:
+            seen.append(index)
+    seen.sort(key=PHOTO_INDEX.index)
+    return [{"url": "https://static.car.gr/%s_%s_{size}.jpg" % (cid, i)} for i in seen]
+
+
+def classified_from_html(cid, markup):
+    """Baut aus der Detailseite die Struktur nach, die build_car() erwartet."""
+    vehicle = json_ld_vehicle(markup)
+    body = re.sub(r"<script.*?</script>|<style.*?</style>", "", markup, flags=re.S)
+    root = parse_html(body)
+
+    pairs = label_pairs(root)
+    specs, make_model, variant = {}, "", ""
+    for key, value in pairs:
+        if key == BRAND_LABEL:
+            make_model = make_model or value
+        elif key == VARIANT_LABEL:
+            variant = variant or value
+        elif key in SPEC_LABELS and value:
+            specs.setdefault(SPEC_LABELS[key], value)
+
+    make, _, model = make_model.partition(" ")
+    name = vehicle.get("name") or ""
+    if not name:
+        match = re.search(r"<h1[^>]*>(.*?)</h1>", markup, re.S) or \
+                re.search(r"<title>(?:Car\.gr\s*-\s*)?(.*?)</title>", markup, re.S)
+        if match:
+            name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", match.group(1))).strip()
+    year = num((specs.get("registration") or "").split("/")[-1])
+    if not year:
+        year = num(str(vehicle.get("modelDate") or vehicle.get("productionDate") or ""))
+    if not variant:
+        # Was im Titel uebrig bleibt, wenn Marke, Modell und Baujahr weg sind.
+        rest = name
+        for word in (make_model.split() + [str(year or "")]):
+            if word:
+                rest = re.sub(r"(?<!\w)%s(?!\w)" % re.escape(word), " ", rest)
+        variant = " ".join(rest.split())
+
+    extras = extras_list(root)
+    price_raw = None
+    offers = vehicle.get("offers") or {}
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    if isinstance(offers, dict):
+        try:
+            price_raw = int(float(offers.get("price")))
+        except (TypeError, ValueError):
+            price_raw = None
+
+    return {
+        "title_parts": {"make": make, "model": model, "variant": variant, "year": year},
+        "specifications": [{"name": k, "value": v} for k, v in specs.items()],
+        "photos_compact": {"native": {"photos": photo_patterns(markup, cid, vehicle)}},
+        "price": {"extra": {"rawPrice": price_raw,
+                            "without_vat": "χωρίς ΦΠΑ" in markup or "Χωρίς ΦΠΑ" in markup}},
+        "key_features": [{"key": "category", "value": specs.get("category")
+                          or dict(pairs).get("Κατηγορία")}],
+        "extras": [{"value": e} for e in extras],
+        "description": description_from(root),
+        "crashed": any("Τρακαρισμ" in e for e in extras),
+    }
+
+
+def cached_page(cid):
+    """Zuletzt geholte Detailseite, sofern noch frisch genug.
+
+    car.gr sperrt Detailseiten schnell. Der Cache erlaubt es, den Import kurz
+    hintereinander laufen zu lassen (Probelauf, dann echter Lauf) ohne die
+    Seiten erneut abzurufen. CARGR_CACHE_MINUTES=0 schaltet ihn ab."""
+    minutes = float(os.environ.get("CARGR_CACHE_MINUTES", "60"))
+    if minutes <= 0:
+        return None
+    path = os.path.join(CACHE_DIR, "%s.html" % cid)
+    if not os.path.exists(path) or os.path.getsize(path) < 50000:
+        return None
+    if (time.time() - os.path.getmtime(path)) > minutes * 60:
+        return None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def store_page(cid, markup):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(os.path.join(CACHE_DIR, "%s.html" % cid), "w", encoding="utf-8") as fh:
+            fh.write(markup)
+    except OSError:
+        pass          # Cache ist Beiwerk, ein Fehler darf den Import nicht kippen
+
+
+def fetch_classified(cid, vehicle_type):
+    """Detailseite holen. car.gr drosselt (429) — dann warten statt aufgeben."""
+    hit = cached_page(cid)
+    if hit is not None:
+        return classified_from_html(cid, hit)
+    section = "vans" if vehicle_type.startswith("Επαγγ") else "cars"
+    url = "%s/%s/view/%s/" % (BASE, section, cid)
+    delay = 60
+    for attempt in range(5):
+        try:
+            markup = get(url)
+            store_page(cid, markup)
+            return classified_from_html(cid, markup)
+        except urllib.error.HTTPError as error:
+            # 410/404 = verkauft und geloescht, das Fahrzeug faellt zu Recht raus.
+            # 429 und 5xx sind voruebergehend - da lohnt ein zweiter Versuch.
+            if error.code in (404, 410) or attempt == 4:
+                raise
+            if error.code != 429 and error.code < 500:
+                raise
+            print("    429 von car.gr — %d s warten" % delay)
+            time.sleep(delay)
+            delay = min(delay * 2, 600)
+    raise RuntimeError("unerreichbar: %s" % url)
 
 
 def build_car(cid, payload):
@@ -276,16 +589,48 @@ def main():
     ids = find_ids()
     print(f"{len(ids)} Inserate gefunden.")
 
+    # Bestehende Daten als Rueckfallebene: ein 502 oder eine Zeitueberschreitung
+    # darf kein Fahrzeug von der Website werfen. Nur 404/410 (auf car.gr wirklich
+    # geloescht) fuehren dazu, dass ein Inserat verschwindet.
+    previous = {}
+    old_path = os.path.join(ROOT, "data", "cars.json")
+    if os.path.exists(old_path):
+        with open(old_path, encoding="utf-8") as fh:
+            previous = {str(c["carGrId"]): c for c in json.load(fh)}
+
     cars = []
+    kept_old = []
     for cid, vehicle_type in ids:
-        payload = json.loads(get(f"{BASE}/api/classifieds/{cid}/"))
-        car = build_car(cid, payload)
+        try:
+            classified = fetch_classified(cid, vehicle_type)
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 410):
+                print(f"  - {cid}: auf car.gr geloescht ({error.code}) — faellt raus")
+                continue
+            if cid in previous:
+                print(f"  ! {cid}: {error} — behalte den bisherigen Stand")
+                cars.append(dict(previous[cid], _photoUrls=[]))
+                kept_old.append(cid)
+                continue
+            print(f"  ! {cid} uebersprungen: {error}")
+            continue
+        except Exception as error:
+            if cid in previous:
+                print(f"  ! {cid}: {error} — behalte den bisherigen Stand")
+                cars.append(dict(previous[cid], _photoUrls=[]))
+                kept_old.append(cid)
+                continue
+            print(f"  ! {cid} uebersprungen: {error}")
+            continue
+        car = build_car(cid, {"data": {"classified": classified}})
         car["vehicleType"] = vehicle_type
         print(f"  {car['brand']} {car['model']} ({car['year']}) — {len(car['images'])} Fotos")
         if with_images:
             download_images(car)
         car.pop("_photoUrls")
         cars.append(car)
+        if cached_page(cid) is None:
+            time.sleep(PAGE_DELAY)   # car.gr sperrt sonst die Detailseiten (429)
 
     cars = drop_duplicates(cars)
     migrate_folders(cars)
@@ -294,6 +639,10 @@ def main():
         json.dump(cars, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
     print(f"\ndata/cars.json geschrieben: {len(cars)} Fahrzeuge.")
+    if kept_old:
+        print(f"  Achtung: {len(kept_old)} davon aus dem bisherigen Stand "
+              f"uebernommen, weil car.gr sie gerade nicht auslieferte: "
+              f"{', '.join(kept_old)}")
     write_sitemap(cars)
 
     from build_pages import build as build_pages

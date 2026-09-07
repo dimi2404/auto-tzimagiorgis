@@ -36,6 +36,21 @@ SITE_URL=https://www.auto-tzimagiorgis.com python3 tools/build_pages.py
 git add -A && git commit -m "Fahrzeugbestand aktualisiert" && git push
 ```
 
+### Woher die Daten kommen
+
+car.gr hat die JSON-API (`/api/classifieds/<id>/`) hinter eine Cloudflare-Pruefung
+gelegt — sie antwortet nur noch mit **403**, egal mit welchen Headern oder Cookies.
+Der Importer liest die Angaben deshalb aus den oeffentlichen Detailseiten:
+
+- Merkmalstabelle als Beschriftung/Wert-Paare (`SPEC_LABELS` uebersetzt die
+  griechischen Beschriftungen). Aendert car.gr eine Beschriftung, faellt genau
+  das Feld auf `None` — dann in `SPEC_LABELS` nachtragen.
+- Fotos aus JSON-LD **und** Markup zusammengefuehrt: JSON-LD listet alle, fehlt
+  aber bei manchen Inseraten; im Markup stehen nur die ersten 36. Nummerierung
+  ist `0-9`, dann `a-z`, dann `A-Z` — Gross-/Kleinschreibung unterscheidet Bilder.
+- Verkaufte Fahrzeuge liefern **410 Gone** und fallen automatisch raus.
+- Bei **429** wartet der Importer selbst (30/60/120 s) statt abzubrechen.
+
 `build_pages.py` **immer mit SITE_URL** aufrufen — sonst fehlen canonical, og:url
 und og:image, und WhatsApp zeigt beim Teilen kein Vorschaubild.
 
