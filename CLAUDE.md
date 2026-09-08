@@ -49,7 +49,32 @@ Der Importer liest die Angaben deshalb aus den oeffentlichen Detailseiten:
   aber bei manchen Inseraten; im Markup stehen nur die ersten 36. Nummerierung
   ist `0-9`, dann `a-z`, dann `A-Z` — Gross-/Kleinschreibung unterscheidet Bilder.
 - Verkaufte Fahrzeuge liefern **410 Gone** und fallen automatisch raus.
-- Bei **429** wartet der Importer selbst (30/60/120 s) statt abzubrechen.
+- Bei **429** wartet der Importer selbst (bis 600 s) statt abzubrechen. Für zwei
+  Läufe kurz hintereinander `CARGR_CACHE_MINUTES=600` setzen, sonst holt der
+  zweite alles neu und landet in der Sperre.
+- Die Übersichtsseiten werden durchgeblättert, bis nichts Neues mehr kommt —
+  eine feste Seitenzahl würde Fahrzeuge verschlucken, sobald der Bestand wächst.
+
+### Bestand gegen car.gr prüfen
+
+Die Übersichtsseiten sind **nicht** gedrosselt, die Detailseiten schon. Für einen
+schnellen Abgleich reichen deshalb die Übersichtsseiten — sie tragen ID und Preis:
+
+```bash
+python3 - <<'EOF'
+import importlib.util, json, re, time, urllib.request
+spec = importlib.util.spec_from_file_location("imp", "tools/import-cargr.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+gr = {c for c, _ in m.find_ids()}
+live = {str(c["carGrId"]) for c in json.load(open("data/cars.json"))}
+print("car.gr", len(gr), "| Website", len(live))
+print("fehlt auf der Website:", sorted(gr - live))
+print("zu viel auf der Website:", sorted(live - gr))
+EOF
+```
+
+Was in `gr - live` steht, muss entweder eine Dublette sein (siehe `same_vehicle()`)
+oder in `data/excluded.json` stehen. Alles andere ist ein Fehler.
 
 `build_pages.py` **immer mit SITE_URL** aufrufen — sonst fehlen canonical, og:url
 und og:image, und WhatsApp zeigt beim Teilen kein Vorschaubild.

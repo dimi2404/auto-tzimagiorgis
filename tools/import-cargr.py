@@ -36,13 +36,12 @@ LARGE_COUNT = 10   # so viele Fotos je Fahrzeug zusaetzlich in gross
 # gesperrt zu werden. Ueber CARGR_DELAY anpassbar.
 PAGE_DELAY = float(os.environ.get("CARGR_DELAY", "4"))
 CACHE_DIR = os.path.join(ROOT, ".cache", "cargr")
-LIST_PAGES = [
-    ("Επιβατικά", "/cars/"),
-    ("Επιβατικά", "/cars/?pg=2"),
-    ("Επιβατικά", "/cars/?pg=3"),
-    ("Επαγγελματικά", "/vans/"),
-    ("Επαγγελματικά", "/vans/?pg=2"),
-]
+# car.gr trennt PKW und Nutzfahrzeuge in zwei Bereiche, je 24 Inserate pro Seite.
+# Die Seiten werden durchgeblaettert, bis keine neuen IDs mehr kommen — eine feste
+# Seitenzahl wuerde Fahrzeuge stillschweigend verschlucken, sobald der Bestand
+# waechst.
+SECTIONS = [("Επιβατικά", "/cars/"), ("Επαγγελματικά", "/vans/")]
+MAX_LIST_PAGES = 25
 
 
 def get(url, binary=False):
@@ -68,15 +67,26 @@ def find_ids():
     seen = set(excluded_ids())
     if seen:
         print(f"{len(seen)} Fahrzeug(e) laut data/excluded.json ausgeschlossen.")
-    for vehicle_type, page in LIST_PAGES:
-        try:
-            html = get(BASE + page)
-        except Exception:
-            continue
-        new = [i for i in re.findall(r"/(?:cars|vans)/view/(\d+)", html) if i not in seen]
-        for cid in new:
-            seen.add(cid)
-            found.append((cid, vehicle_type))
+    for vehicle_type, section in SECTIONS:
+        for page in range(1, MAX_LIST_PAGES + 1):
+            url = BASE + section + ("" if page == 1 else "?pg=%d" % page)
+            try:
+                html = get(url)
+            except Exception as error:
+                print(f"  ! {url}: {error}")
+                break
+            ids_here = re.findall(r"/(?:cars|vans)/view/(\d+)", html)
+            if not ids_here:
+                break            # leere Seite: Ende des Bereichs
+            new = [i for i in ids_here if i not in seen]
+            for cid in new:
+                seen.add(cid)
+                found.append((cid, vehicle_type))
+            if not new:
+                break            # nur schon Bekanntes: keine weitere Seite noetig
+            time.sleep(1)
+        else:
+            print(f"  ! {section}: Seitengrenze {MAX_LIST_PAGES} erreicht")
     return found
 
 
