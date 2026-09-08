@@ -663,21 +663,48 @@ def main():
     build_pages(cars)
 
 
+# Wie weit zwei Inserate auseinanderliegen duerfen und trotzdem dasselbe Auto
+# sind. Der Haendler tippt das zweite Inserat neu ein, daher weichen Kilometer,
+# Erstzulassung und manchmal der Preis leicht ab.
+DUP_KM_TOLERANCE = 0.01        # 1 % der Laufleistung
+DUP_KM_MINIMUM = 500           # ... mindestens aber 500 km Spielraum
+DUP_PRICE_TOLERANCE = 0.03     # 3 % Preisunterschied
+
+
+def same_vehicle(a, b):
+    """Zwei Inserate, ein Auto? Marke, Baujahr, Hubraum und Kraftstoff muessen
+    stimmen; Kilometer und Preis duerfen leicht abweichen."""
+    if (a["brand"], a["year"]) != (b["brand"], b["year"]):
+        return False
+    if a["engine_cc"] != b["engine_cc"] or a["fuel"] != b["fuel"]:
+        return False
+    if not a["km"] or not b["km"] or not a["price"] or not b["price"]:
+        return False
+    km_allowed = max(DUP_KM_MINIMUM, max(a["km"], b["km"]) * DUP_KM_TOLERANCE)
+    if abs(a["km"] - b["km"]) > km_allowed:
+        return False
+    return abs(a["price"] - b["price"]) <= max(a["price"], b["price"]) * DUP_PRICE_TOLERANCE
+
+
 def drop_duplicates(cars):
     """Manche Fahrzeuge stehen auf car.gr doppelt (einmal unter Autos, einmal
-    unter Nutzfahrzeuge). Gleiche Marke + Baujahr + km + Preis = dasselbe Auto;
-    behalten wird das Inserat mit den meisten Fotos."""
-    best = {}
-    for car in cars:
-        key = (car["brand"], car["year"], car["km"], car["price"])
-        current = best.get(key)
-        if current is None or len(car["images"]) > len(current["images"]):
-            best[key] = car
-    kept = [c for c in cars if best.get((c["brand"], c["year"], c["km"], c["price"])) is c]
+    unter Nutzfahrzeuge), jeweils frei eingetippt. Behalten wird das Inserat mit
+    den meisten Fotos."""
+    kept = []
+    for car in sorted(cars, key=lambda c: -len(c["images"])):
+        twin = next((k for k in kept if same_vehicle(k, car)), None)
+        if twin is None:
+            kept.append(car)
+        else:
+            print(f"  doppelt: {car['carGrId']} ({len(car['images'])} Fotos) — "
+                  f"behalte {twin['carGrId']} ({len(twin['images'])} Fotos), "
+                  f"{twin['brand']} {twin['modelFull']}")
     removed = len(cars) - len(kept)
     if removed:
         print(f"  {removed} doppelte Anzeige(n) entfernt.")
-    return kept
+    # Reihenfolge der Quelle beibehalten, sortiert wird spaeter in main()
+    keep_ids = {id(k) for k in kept}
+    return [c for c in cars if id(c) in keep_ids]
 
 
 def write_sitemap(cars):
