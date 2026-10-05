@@ -13,7 +13,9 @@ Bildgroessen von car.gr: v(134px) n(320px) m(460px) z(575px) b(1024px)
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -35,6 +37,9 @@ LARGE_COUNT = 10   # so viele Fotos je Fahrzeug zusaetzlich in gross
 # Bestand braucht damit rund vier Minuten - das ist der Preis dafuer, nicht
 # gesperrt zu werden. Ueber CARGR_DELAY anpassbar.
 PAGE_DELAY = float(os.environ.get("CARGR_DELAY", "4"))
+# Abstand zwischen zwei Uebersichtsseiten. car.gr reagiert schon auf wenige
+# schnelle Abrufe mit 403 ("IP gesperrt"), die Sperre loest sich nach Minuten.
+LIST_DELAY = float(os.environ.get("CARGR_LIST_DELAY", "5"))
 CACHE_DIR = os.path.join(ROOT, ".cache", "cargr")
 # car.gr trennt PKW und Nutzfahrzeuge in zwei Bereiche, je 24 Inserate pro Seite.
 # Die Seiten werden durchgeblaettert, bis keine neuen IDs mehr kommen — eine feste
@@ -45,10 +50,42 @@ MAX_LIST_PAGES = 25
 
 
 def get(url, binary=False):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=60) as res:
-        data = res.read()
-    return data if binary else data.decode("utf-8", "replace")
+    """Seite oder Datei von car.gr holen.
+
+    Ueber curl statt urllib: car.gr weist Pythons TLS-Fingerabdruck seit Herbst
+    2026 mit 403 ab (die Seite behauptet dann "deine IP ist gesperrt", obwohl ein
+    Browser von derselben IP problemlos durchkommt). curl spricht HTTP/2 mit einem
+    browseraehnlichen Handshake und wird akzeptiert.
+
+    Fehlerhafte Antworten werden als urllib.error.HTTPError weitergegeben, damit
+    der restliche Code (404/410/429-Behandlung) unveraendert bleibt.
+    """
+    handle, tmp = tempfile.mkstemp(prefix="cargr-")
+    os.close(handle)
+    try:
+        done = subprocess.run(
+            ["curl", "-sS", "-L", "--compressed", "--max-time", "90",
+             "-H", "User-Agent: " + UA,
+             "-H", "Accept-Language: el-GR,el;q=0.9,en;q=0.8",
+             "-o", tmp, "-w", "%{http_code}", url],
+            capture_output=True, text=True, timeout=120)
+        if done.returncode != 0:
+            raise urllib.error.URLError(
+                "curl %d: %s" % (done.returncode, done.stderr.strip()[:200]))
+        try:
+            code = int((done.stdout or "").strip()[-3:])
+        except ValueError:
+            raise urllib.error.URLError("unlesbarer Statuscode von curl")
+        with open(tmp, "rb") as fh:
+            data = fh.read()
+        if code != 200:
+            raise urllib.error.HTTPError(url, code, "HTTP %d" % code, None, None)
+        return data if binary else data.decode("utf-8", "replace")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def excluded_ids():
@@ -70,11 +107,28 @@ def find_ids():
     for vehicle_type, section in SECTIONS:
         for page in range(1, MAX_LIST_PAGES + 1):
             url = BASE + section + ("" if page == 1 else "?pg=%d" % page)
-            try:
-                html = get(url)
-            except Exception as error:
-                print(f"  ! {url}: {error}")
-                break
+            html = None
+            delay = 60
+            for attempt in range(4):
+                try:
+                    html = get(url)
+                    break
+                except urllib.error.HTTPError as error:
+                    # 403 heisst hier "zu schnell gefragt", nicht "Seite gibt es nicht".
+                    # Abbrechen wuerde den halben Bestand verschlucken.
+                    if error.code not in (403, 429) or attempt == 3:
+                        print(f"  ! {url}: {error}")
+                        break
+                    print(f"    {error.code} auf {url} — {delay} s warten")
+                    time.sleep(delay)
+                    delay *= 2
+                except Exception as error:
+                    print(f"  ! {url}: {error}")
+                    break
+            if html is None:
+                raise RuntimeError(
+                    f"Uebersichtsseite {url} nicht erreichbar — Abbruch, damit kein "
+                    f"halber Bestand importiert wird.")
             ids_here = re.findall(r"/(?:cars|vans)/view/(\d+)", html)
             if not ids_here:
                 break            # leere Seite: Ende des Bereichs
@@ -84,7 +138,7 @@ def find_ids():
                 found.append((cid, vehicle_type))
             if not new:
                 break            # nur schon Bekanntes: keine weitere Seite noetig
-            time.sleep(1)
+            time.sleep(LIST_DELAY)
         else:
             print(f"  ! {section}: Seitengrenze {MAX_LIST_PAGES} erreicht")
     return found
@@ -608,10 +662,16 @@ def download_images(car):
             time.sleep(0.05)
 
 
+# Untergrenze: liefern die Uebersichtsseiten weniger als diesen Anteil des
+# bisherigen Bestands, stimmt etwas mit car.gr nicht (IP-Sperre, Umbau, Ausfall).
+# Dann wird nichts geschrieben. Mit --force laesst sich das uebergehen, etwa wenn
+# der Haendler wirklich den halben Bestand verkauft hat.
+MIN_SHARE_OF_PREVIOUS = 0.5
+
+
 def main():
     with_images = "--no-images" not in sys.argv
-    ids = find_ids()
-    print(f"{len(ids)} Inserate gefunden.")
+    force = "--force" in sys.argv
 
     # Bestehende Daten als Rueckfallebene: ein 502 oder eine Zeitueberschreitung
     # darf kein Fahrzeug von der Website werfen. Nur 404/410 (auf car.gr wirklich
@@ -621,6 +681,25 @@ def main():
     if os.path.exists(old_path):
         with open(old_path, encoding="utf-8") as fh:
             previous = {str(c["carGrId"]): c for c in json.load(fh)}
+
+    ids = find_ids()
+    print(f"{len(ids)} Inserate gefunden.")
+
+    # Notbremse. Ohne sie wuerde eine gesperrte IP (car.gr antwortet dann mit 403
+    # auf die Uebersichtsseiten) zu einer leeren cars.json fuehren und saemtliche
+    # Fahrzeugseiten loeschen — die Website waere leer.
+    if previous and not force:
+        mindestens = int(len(previous) * MIN_SHARE_OF_PREVIOUS)
+        if not ids:
+            print("\nABBRUCH: car.gr liefert keine Inserate. Nichts geaendert.")
+            print("  Meist eine IP-Sperre (403 auf die Uebersichtsseiten) oder ein")
+            print("  Ausfall. Erst pruefen, dann erneut laufen lassen.")
+            return 1
+        if len(ids) < mindestens:
+            print(f"\nABBRUCH: nur {len(ids)} Inserate statt bisher {len(previous)}.")
+            print("  Das sieht nach einem Problem auf car.gr aus, nicht nach Verkaeufen.")
+            print("  Wenn der Bestand wirklich so geschrumpft ist: --force anhaengen.")
+            return 1
 
     cars = []
     kept_old = []
@@ -735,4 +814,4 @@ def write_sitemap(cars):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
